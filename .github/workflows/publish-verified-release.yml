@@ -1,0 +1,49 @@
+name: Publish verified release
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: Check the authorized draft without publishing it
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scratchpeek-release-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'Sarr77/Omarchy-release-automation' &&
+      github.event.repository.private == false &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      vars.SCRATCHPEEK_RELEASE_PLAN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check release publisher
+        run: |
+          python3 -B -m unittest discover -s tests -v
+      - name: Publish only the authorized marketplace-verified draft
+        env:
+          SCRATCHPEEK_RELEASE_PLAN: ${{ vars.SCRATCHPEEK_RELEASE_PLAN }}
+          RELEASE_PLAN_TOKEN: ${{ secrets.RELEASE_PLAN_TOKEN }}
+          SCRATCHPEEK_RELEASE_TOKEN: ${{ secrets.SCRATCHPEEK_RELEASE_TOKEN }}
+          CHECK_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.check_only }}
+        run: |
+          if [[ "$CHECK_ONLY" == "true" ]]; then
+            python3 -B tools/publish_verified_release.py --project scratchpeek
+          else
+            python3 -B tools/publish_verified_release.py --project scratchpeek --publish
+          fi
