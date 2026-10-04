@@ -26,17 +26,19 @@ PUBLICATION = {"draft": False, "make_latest": "true", "tag_name": "v0.11.2", "ta
 
 
 class FakeGitHub:
-    def __init__(self):
-        self.plan = copy.deepcopy(PLAN)
-        self.release = {"id": 123, "draft": True, "prerelease": False, "immutable": False,
-                        "name": PLAN["title"], "body": PLAN["body"], "tag_name": "v0.11.2",
-                        "target_commitish": SHA, "author": {"id": publisher.AUTHOR_ID},
-                        "html_url": "https://github.com/Sarr77/ScratchPeek/releases/tag/v0.11.2"}
-        self.assets = [dict(a, state="uploaded") for a in PLAN["assets"]]
-        self.tag = {"ref": "refs/tags/v0.11.2", "object": {"type": "commit", "sha": SHA}}
-        self.manifest = {"id": "sarr.scratchpeek", "version": "0.11.2", "author": "Sarr"}
+    def __init__(self, project=publisher.SCRATCHPEEK, plan=None):
+        self.project = project
+        self.plan = copy.deepcopy(PLAN if plan is None else plan)
+        plan = self.plan
+        self.release = {"id": plan["releaseId"], "draft": True, "prerelease": False, "immutable": False,
+                        "name": plan["title"], "body": plan["body"], "tag_name": "v" + plan["version"],
+                        "target_commitish": plan["commit"], "author": {"id": project.author_id},
+                        "html_url": "https://github.com/" + project.repository + "/releases/tag/v" + plan["version"]}
+        self.assets = [dict(a, state="uploaded") for a in plan["assets"]]
+        self.tag = {"ref": "refs/tags/v" + plan["version"], "object": {"type": "commit", "sha": plan["commit"]}}
+        self.manifest = {"id": project.plugin_id, "version": plan["version"], "author": project.author_name}
         self.immutable = True
-        self.latest = {"id": 122, "tag_name": "v0.11.1", "draft": False, "prerelease": False}
+        self.latest = {"id": plan["releaseId"] - 1, "tag_name": "v0.0.1", "draft": False, "prerelease": False}
         self.calls = []
         self.writes = []
         self.before_get = lambda path, count: None
@@ -47,20 +49,20 @@ class FakeGitHub:
         self.calls.append(path)
         self.before_get(path, self.calls.count(path))
         if path == "":
-            value = {"full_name": publisher.REPOSITORY, "private": False, "visibility": "public", "default_branch": "main"}
-        elif path == "/actions/variables/" + publisher.PLAN_VARIABLE:
+            value = {"full_name": self.project.repository, "private": False, "visibility": "public", "default_branch": "main"}
+        elif path == "/actions/variables/" + self.project.plan_variable:
             if self.deleted:
                 raise publisher.Blocked("authorization withdrawn")
-            value = {"name": publisher.PLAN_VARIABLE, "value": json.dumps(self.plan)}
-        elif path == "/releases/123":
+            value = {"name": self.project.plan_variable, "value": json.dumps(self.plan)}
+        elif path == "/releases/" + str(self.plan["releaseId"]):
             value = self.release
-        elif path == "/releases/123/assets?per_page=100":
+        elif path == "/releases/" + str(self.plan["releaseId"]) + "/assets?per_page=100":
             value = self.assets
-        elif path == "/git/ref/tags/v0.11.2":
+        elif path == "/git/ref/tags/v" + self.plan["version"]:
             value = self.tag
         elif path == "/git/tags/" + "b" * 40:
             value = {"object": {"type": "commit", "sha": SHA}}
-        elif path == "/contents/manifest.json?ref=" + SHA:
+        elif path == "/contents/manifest.json?ref=" + self.plan["commit"]:
             value = {"encoding": "base64", "type": "file",
                      "content": base64.b64encode(json.dumps(self.manifest).encode()).decode()}
         elif path == "/immutable-releases":
@@ -73,13 +75,14 @@ class FakeGitHub:
 
     def request(self, path, method="GET", payload=None):
         self.writes.append((method, path, payload))
-        if method == "PATCH" and path == publisher.PREFIX + "/releases/123":
-            assert payload == PUBLICATION
+        if method == "PATCH" and path == "/repos/" + self.project.repository + "/releases/" + str(self.plan["releaseId"]):
+            assert payload == {"draft": False, "make_latest": "true", "tag_name": "v" + self.plan["version"],
+                               "target_commitish": self.plan["commit"]}
             self.release.update(draft=False, immutable=self.immutable)
             self.latest = self.release
             self.after_patch()
             return copy.deepcopy(self.release)
-        if method == "DELETE" and path == publisher.PLAN_PREFIX + "/actions/variables/" + publisher.PLAN_VARIABLE:
+        if method == "DELETE" and path == publisher.PLAN_PREFIX + "/actions/variables/" + self.project.plan_variable:
             assert payload is None
             self.deleted = True
             return None
@@ -97,7 +100,7 @@ class ReleaseAPI:
         return self.state.get(path)
 
     def request(self, path, method="GET", payload=None):
-        assert method == "PATCH" and path.startswith(publisher.PREFIX + "/releases/")
+        assert method == "PATCH" and path.startswith("/repos/" + self.state.project.repository + "/releases/")
         self.calls.append((method, path))
         return self.state.request(path, method, payload)
 
@@ -108,19 +111,19 @@ class PlanAPI:
         self.calls = []
 
     def get(self, path):
-        assert path == "/actions/variables/" + publisher.PLAN_VARIABLE
+        assert path == "/actions/variables/" + self.state.project.plan_variable
         self.calls.append(("GET", path))
         return self.state.get(path)
 
     def request(self, path, method="GET", payload=None):
-        assert method == "DELETE" and path == publisher.PLAN_PREFIX + "/actions/variables/" + publisher.PLAN_VARIABLE
+        assert method == "DELETE" and path == publisher.PLAN_PREFIX + "/actions/variables/" + self.state.project.plan_variable
         self.calls.append((method, path))
         return self.state.request(path, method, payload)
 
 
-def catalog():
+def catalog(project=publisher.SCRATCHPEEK):
     return {"stateSchemaVersion": 2, "plugins": [{
-        "id": "sarr.scratchpeek", "repo": "https://github.com/Sarr77/ScratchPeek",
+        "id": project.plugin_id, "repo": "https://github.com/" + project.repository,
         "sourceType": "community", "repositoryLayout": "root-plugin", "manifestPath": "manifest.json",
         "installAvailable": True, "verificationSnapshotStatus": "verified",
         "listingValidatedCommit": SHA, "verificationCommit": SHA}]}
@@ -428,9 +431,9 @@ class PublicationTests(unittest.TestCase):
                 ("release-only-secret", publisher.REPOSITORY), ("plan-only-secret", publisher.AUTOMATION_REPOSITORY)])
             self.assertEqual(worker.return_value.run.call_args.args, (PLAN, False))
 
-    def test_windowpeek_is_not_enabled_by_this_change(self):
-        self.assertEqual(set(publisher.PROJECTS), {"scratchpeek"})
-        with patch.object(publisher.sys, "argv", ["publisher", "--project", "windowpeek"]), \
+    def test_only_the_two_reviewed_projects_are_enabled(self):
+        self.assertEqual(set(publisher.PROJECTS), {"scratchpeek", "windowpeek"})
+        with patch.object(publisher.sys, "argv", ["publisher", "--project", "another"]), \
                 patch.object(publisher, "GitHub") as client, patch.object(publisher.sys, "stderr", io.StringIO()):
             with self.assertRaises(SystemExit): publisher.main()
             client.assert_not_called()
@@ -523,8 +526,63 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(request.get_header("Authorization"), "Bearer plan-only")
 
     def test_unconfigured_repository_is_rejected(self):
-        for repository in ("Sarr77/WindowPeek", "other/repo"):
+        for repository in ("Sarr77/OtherPeek", "other/repo"):
             with self.assertRaises(publisher.Blocked): publisher.GitHub("token", repository)
+
+
+class WindowPeekPublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.project = publisher.PROJECTS["windowpeek"]
+        self.plan = copy.deepcopy(PLAN)
+        self.plan.update(repository=self.project.repository, version="0.7.9", title="WindowPeek 0.7.9")
+        self.plan["assets"][0]["name"] = "WindowPeek-0.7.9.zip"
+        self.api = FakeGitHub(self.project, self.plan)
+        self.api.latest["tag_name"] = "v0.7.8"
+        self.snapshot = catalog(self.project)
+        self.worker = publisher.Publisher(ReleaseAPI(self.api), PlanAPI(self.api),
+                                          lambda: copy.deepcopy(self.snapshot), self.project)
+
+    def test_windowpeek_ready_publish_and_disarm_only_its_plan(self):
+        self.assertEqual(self.worker.run(self.plan), "ready")
+        self.assertEqual(self.api.writes, [])
+        self.assertEqual(self.worker.run(self.plan, publish=True), "published")
+        self.assertEqual([method for method, _, _ in self.api.writes], ["PATCH", "DELETE"])
+        self.assertEqual(self.api.writes[0][1], "/repos/Sarr77/WindowPeek/releases/123")
+        self.assertEqual(self.api.writes[1][1], publisher.PLAN_PREFIX + "/actions/variables/WINDOWPEEK_RELEASE_PLAN")
+
+    def test_scratchpeek_catalog_or_token_cannot_authorize_windowpeek(self):
+        self.snapshot = catalog()
+        self.assertEqual(self.worker.run(self.plan, publish=True), "waiting-for-marketplace")
+        self.assertEqual(self.api.writes, [])
+        self.snapshot = catalog(self.project)
+        self.api.plan["repository"] = "Sarr77/ScratchPeek"
+        with self.assertRaises(publisher.Blocked):
+            self.worker.run(self.plan, publish=True)
+        self.assertEqual(self.api.writes, [])
+
+    def test_windowpeek_tampering_and_retry_preserve_later_text(self):
+        self.api.assets[0]["digest"] = "sha256:" + "b" * 64
+        with self.assertRaises(publisher.Blocked):
+            self.worker.run(self.plan, publish=True)
+        self.assertEqual(self.api.writes, [])
+        self.api.assets[0]["digest"] = self.plan["assets"][0]["digest"]
+        self.api.release.update(draft=False, immutable=True, name="Later approved title", body="Later approved notes")
+        self.assertEqual(self.worker.run(self.plan, publish=True), "already-published")
+        self.assertEqual([method for method, _, _ in self.api.writes], ["DELETE"])
+
+    def test_windowpeek_cli_selects_only_its_release_token(self):
+        environment = {self.project.plan_variable: json.dumps(self.plan),
+                       self.project.token_secret: "windowpeek-only-secret", "RELEASE_PLAN_TOKEN": "plan-only-secret",
+                       publisher.SCRATCHPEEK.token_secret: "scratchpeek-only-secret"}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(publisher.sys, "argv", ["publisher", "--project", "windowpeek"]), \
+                patch.object(publisher, "GitHub") as client, patch.object(publisher, "Publisher") as worker:
+            worker.return_value.run.return_value = "ready"
+            self.assertEqual(publisher.main(), 0)
+            self.assertEqual([call.args for call in client.call_args_list], [
+                ("windowpeek-only-secret", "Sarr77/WindowPeek"),
+                ("plan-only-secret", publisher.AUTOMATION_REPOSITORY)])
+            self.assertEqual(worker.return_value.run.call_args.args, (self.plan, False))
 
 
 

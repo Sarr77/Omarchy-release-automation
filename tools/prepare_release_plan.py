@@ -16,6 +16,44 @@ from publish_verified_release import require, policy, parse_plan
 from projects import PROJECTS, SCRATCHPEEK
 
 
+def package_names(checkout, commit, blob, project):
+    """Match the reviewed packager against regular files at the exact commit."""
+    tree = subprocess.check_output(["git", "-C", str(checkout), "ls-tree", "-rz", "--full-tree", commit])
+    entries = {}
+    for record in tree.split(b"\0"):
+        if not record:
+            continue
+        attributes, name = record.split(b"\t", 1)
+        mode, _, _ = attributes.split()
+        path = name.decode("utf-8")
+        require(path not in entries, "invalid release source tree")
+        entries[path] = mode.decode("ascii")
+
+    if project.package_layout == "file-list":
+        names = blob("tools/package-files.txt").decode("utf-8").splitlines()
+    elif project.package_layout == "windowpeek-v1":
+        require(hashlib.sha256(blob("tools/package.py")).hexdigest() == project.package_script_sha256,
+                "WindowPeek packager changed; review its file rules before preparing a release")
+        root_files = {"update.py", "wallpaper_contrast.py", "bounded_io.py", "README.md",
+                      "CHANGELOG.md", "LICENSE", "qmldir", ".gitignore", "preview.png"}
+        directories = {"docs", "tests", "tools", "vendor", "assets", "translations", ".github"}
+        names = [name for name in entries if
+                 ("/" not in name and (PurePosixPath(name).suffix in (".qml", ".js", ".json")
+                                       or name in root_files))
+                 or (name.split("/", 1)[0] in directories and "/" in name
+                     and "__pycache__" not in PurePosixPath(name).parts)]
+    else:
+        raise ValueError("unknown project package layout")
+
+    require(bool(names) and len(names) == len(set(names)), "invalid release file list")
+    for name in names:
+        path = PurePosixPath(name)
+        require(bool(name) and not path.is_absolute() and ".." not in path.parts and path.as_posix() == name,
+                "unsafe release file path")
+        require(entries.get(name) in ("100644", "100755"), "release source is not a regular committed file")
+    return names
+
+
 def prepare(checkout, commit, archive, title, body, release_id=0, approved=False, checksum=None, project=SCRATCHPEEK):
     require(isinstance(commit, str) and re.fullmatch(r"[a-f0-9]{40}", commit), "expected a full commit SHA")
 
@@ -29,15 +67,7 @@ def prepare(checkout, commit, archive, title, body, release_id=0, approved=False
     version = manifest["version"]
     policy.version(version)
     require(archive.name == f"{project.archive_prefix}-{version}.zip", "archive filename does not match the version")
-    names = blob("tools/package-files.txt").decode().splitlines()
-    require(bool(names) and len(names) == len(set(names)), "invalid release file list")
-    for name in names:
-        path = PurePosixPath(name)
-        require(bool(name) and not path.is_absolute() and ".." not in path.parts and path.as_posix() == name,
-                "unsafe release file path")
-        entry = subprocess.check_output(["git", "-C", str(checkout), "ls-tree", commit, "--", name]).decode()
-        require(entry.startswith(("100644 blob ", "100755 blob ")) and entry.rstrip().endswith("\t" + name),
-                "release source is not a regular committed file")
+    names = package_names(checkout, commit, blob, project)
     raw = archive.read_bytes()
     with zipfile.ZipFile(archive) as content:
         require(sorted(content.namelist()) == sorted(project.key + "/" + name for name in names),

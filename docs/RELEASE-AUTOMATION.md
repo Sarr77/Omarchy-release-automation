@@ -1,7 +1,7 @@
 # Release publication after marketplace verification
 
-The workflow runs in `Sarr77/Omarchy-release-automation`. Its only configured
-release destination is `Sarr77/ScratchPeek`. Nothing is pushed to the plugin's
+The workflow runs in `Sarr77/Omarchy-release-automation`. Its configured
+destinations are `Sarr77/ScratchPeek` and `Sarr77/WindowPeek`. Nothing is pushed to either plugin's
 branches: adding or updating this automation does not change the plugin's HEAD
 or create a different upstream commit for the marketplace to detect.
 
@@ -17,17 +17,18 @@ models, paid runners, Actions caches or uploaded Actions artifacts.
 Setup and publication require the owner's approval of the exact final files,
 commit, destination, repository visibility and release plan.
 
-1. Create the public automation repository with this reviewed commit on `main`.
-   Leave the plugin repository's `main` and settings unchanged. Its immutable
-   releases setting must already be enabled; the publisher reads but never
-   changes it.
-2. Create two fine-grained personal access tokens owned by Sarr77. Restrict
-   each token to only the repository listed below. Store both as Actions
-   secrets in the automation repository:
+1. Publish only the owner's approved automation commit to this public
+   repository's `main`. Leave both plugin repositories' `main` and settings
+   unchanged. Immutable releases must already be enabled for each destination;
+   the publisher reads but never changes that setting.
+2. Keep the existing ScratchPeek and plan tokens. Create one fine-grained
+   personal access token owned by Sarr77 for WindowPeek alone. Store it as an
+   Actions secret in this automation repository:
 
    | Secret | Only selected repository | Permissions |
    | --- | --- | --- |
    | `SCRATCHPEEK_RELEASE_TOKEN` | `Sarr77/ScratchPeek` | Contents read/write; Administration read |
+   | `WINDOWPEEK_RELEASE_TOKEN` | `Sarr77/WindowPeek` | Contents read/write; Administration read |
    | `RELEASE_PLAN_TOKEN` | `Sarr77/Omarchy-release-automation` | Variables read/write |
 
    GitHub includes Metadata read automatically. Contents write publishes the
@@ -42,9 +43,11 @@ commit, destination, repository visibility and release plan.
    resolved target adds or modifies `.github/workflows/` relative to the
    plugin repository's default branch. For the prepared 0.11.2 release, the
    target and ScratchPeek `main` both remain `f8e9754f8804db852407f804f36cb0b69c2e82c4`,
-   so that additional permission is not needed. If a future release has such
-   a difference, review and approve adding Workflows read/write to that
-   project's release token, or wait for the target to match the default branch.
+   so that additional permission is not needed. WindowPeek's currently verified
+   0.7.8 tag and `main` both resolve to `c261d1df6cdf2ca0310b73e5fdc3d66931dfd102`;
+   it also needs no Workflows write. If a future release has such a difference,
+   review and approve adding Workflows write to only that project's release
+   token, or wait for the target to match the default branch.
    Never broaden the token to all repositories. The built-in workflow token
    cannot be authorized for Workflows write.
 
@@ -60,10 +63,11 @@ commit, destination, repository visibility and release plan.
    inspect its result. Local tests and actionlint do not prove a hosted run or
    the permissions of newly issued tokens.
 
-No plan means the publication job is skipped without starting a runner. A fork,
+No plan means that project's publication job is skipped without starting a runner. A fork,
 private automation repository or run on a branch other than `main` is skipped.
-A skipped workflow record remains in Actions. An armed plan requests up to 96
-checks a day. The two stored tokens alone do not authorize any release.
+A skipped workflow record remains in Actions. Each armed plan requests up to 96
+checks a day. Stored tokens alone do not authorize any release. The jobs have
+independent concurrency groups and failures.
 
 ## Preparing each release
 
@@ -72,8 +76,18 @@ release text. The owner must separately approve the full SHA, release title,
 full notes, all attachments and their hashes, destination and deferred
 publication after catalog verification.
 
+For every ScratchPeek and WindowPeek release, draft short, natural
+`## Patch Notes` that explain the changes and fixes in plain language.
+Show the complete title and notes to the owner for approval or revision before
+preparing the public draft or arming its plan. Use only the approved text in
+the draft and plan; never generate notes from commits in the publisher.
+
 1. Build the reproducible plugin archive from that exact commit, rather than
    a working directory with later changes. Review the complete materials.
+   ScratchPeek uses its committed `tools/package-files.txt`. WindowPeek uses the
+   reviewed selection rules of its committed `tools/package.py`, with files
+   under `windowpeek/`. The offline plan checker rejects a changed WindowPeek
+   packager until its rules are reviewed in this automation repository.
 2. Prepare or reuse a matching draft in the plugin repository, with the full
    SHA as `target_commitish`, a `vX.Y.Z` tag, approved title and notes, no
    prerelease and no discussion. Attach the reviewed ZIP and optional checksum.
@@ -84,26 +98,29 @@ publication after catalog verification.
 
    ```sh
    python3 -B tools/prepare_release_plan.py \
-     --project scratchpeek \
-     --checkout /path/to/ScratchPeek \
+     --project PROJECT_KEY \
+     --checkout /path/to/PLUGIN \
      --commit FULL_COMMIT_SHA \
-     --archive /path/to/ScratchPeek-X.Y.Z.zip \
-     --checksum /path/to/ScratchPeek-X.Y.Z.sha256 \
-     --title 'ScratchPeek X.Y.Z' \
+     --archive /path/to/PROJECT-X.Y.Z.zip \
+     --checksum /path/to/PROJECT-X.Y.Z.sha256 \
+     --title 'Approved title' \
      --notes /path/to/release-notes.md \
      --release-id DRAFT_ID \
      --approve-for-publication \
      --output /path/to/release-plan.json
    ```
 
-   This is offline and checks every archived file against the package file
-   list and Git blobs at the exact plugin commit. Symlinks, non-commit objects,
+   `PROJECT_KEY` is `scratchpeek` or `windowpeek`; use that project's exact
+   archive prefix in the ZIP and checksum filenames. This is offline and
+   checks every archived file against the approved package selection and Git
+   blobs at the exact plugin commit. Symlinks, non-commit objects,
    additional files and invalid checksum contents are rejected. Omitting the
    approval flag creates a disarmed review template. The flag does not grant
    owner consent by itself. The plan must fit GitHub's 48 KiB variable limit.
-4. Put the entire approved JSON into the **automation repository's** Actions
-   variable `SCRATCHPEEK_RELEASE_PLAN`. Do not put it in ScratchPeek, and do
-   not commit the plan or future release text to either repository. This arms
+4. Put the entire approved JSON into this **automation repository's** Actions
+   variable `SCRATCHPEEK_RELEASE_PLAN` or `WINDOWPEEK_RELEASE_PLAN`, matching
+   the project. Do not put it in a plugin repository, and do not commit the
+   plan or future release text to any repository. This arms
    exactly that draft. Only one plan per project may be armed. Do not replace
    it while a publication job is running. Clear it, cancel the job and wait
    for completion before replacing it; clearing cannot recall a publication
@@ -115,8 +132,9 @@ publication after catalog verification.
 The publisher does not generate text, build packages, create drafts, select
 HEAD, upload attachments, create or move tags, change repo settings or push
 source commits. The released source is the plugin SHA in the plan, not this
-repository's automation commit. If 0.11.2 is published manually first, do not
-arm its plan; reserve the workflow for the next prepared release.
+repository's automation commit. WindowPeek 0.7.8 already has an immutable
+published release at its verified commit, so no 0.7.8 plan or duplicate ZIP is
+needed. Prepare a separate plan only for a future approved release.
 
 ## Checks and recovery
 
@@ -155,18 +173,21 @@ needs approval of its exact final text. Tags and attachments remain immutable.
 
 GitHub disables public scheduled workflows after 60 days of inactivity in the
 **automation repository**; plugin commits do not reset that repository's timer.
-Check the workflow is enabled and tokens valid when arming a new release.
+Schedules can also be delayed or dropped under load. Fine-grained tokens may
+expire or be revoked; check the workflow is enabled and token validity before
+arming a new release, then inspect the first hosted check-only run. A token
+failure blocks publication and leaves the plan for investigation.
 Failures appear in Actions; the publisher posts no messages or issues.
 
-## Adding another project later
+## Project isolation
 
 `tools/projects.py` is the explicit allowlist of projects and destinations.
 The publisher, catalog checker and offline plan tool receive a project
-configuration; the plan cannot supply a different destination. ScratchPeek is
-the only enabled entry. WindowPeek has no configuration, token, workflow job
-or active plan in this version.
+configuration; the plan cannot supply a different destination. ScratchPeek and
+WindowPeek have separate jobs, plans and release tokens. No WindowPeek plan is
+armed merely by adding this configuration.
 
-To add a project, review its repository, plugin ID, package layout, archive
+To add another project later, review its repository, plugin ID, package layout, archive
 prefix and author, then add a configuration and a separate workflow job. Give
 that job its own per-project concurrency group, variable and release token,
 and expose only that project's token to it. A separate named job can be skipped
@@ -181,4 +202,5 @@ References: [standard public runners](https://docs.github.com/en/billing/concept
 [schedules](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
 [release permissions](https://docs.github.com/en/rest/releases/releases#update-a-release),
 [variable permissions](https://docs.github.com/en/rest/actions/variables#delete-a-repository-variable),
-[immutability setting](https://docs.github.com/en/rest/repos/repos#check-if-immutable-releases-are-enabled-for-a-repository).
+[immutability setting](https://docs.github.com/en/rest/repos/repos#check-if-immutable-releases-are-enabled-for-a-repository),
+[fine-grained token lifetimes](https://docs.github.com/en/organizations/managing-programmatic-access-to-your-organization/github-credential-types).
